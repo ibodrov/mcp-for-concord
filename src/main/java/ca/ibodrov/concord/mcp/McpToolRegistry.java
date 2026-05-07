@@ -24,6 +24,8 @@ import static com.walmartlabs.concord.sdk.MapUtils.getString;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.walmartlabs.concord.common.ObjectMapperProvider;
+import com.walmartlabs.concord.server.sdk.validation.ValidationErrorsException;
+import com.walmartlabs.concord.server.security.UnauthorizedException;
 import java.io.OutputStream;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -40,7 +42,11 @@ public class McpToolRegistry {
     private final Map<String, McpTool> toolsByName;
 
     @Inject
-    McpToolRegistry(ConcordCrudTools crudTools, ConcordProcessTools processTools, ConcordLogTools logTools) {
+    McpToolRegistry(
+            ConcordCrudTools crudTools,
+            ConcordUserTools userTools,
+            ConcordProcessTools processTools,
+            ConcordLogTools logTools) {
         var crudToolList = List.of(
                 tool(
                         "concord_create_org",
@@ -162,6 +168,84 @@ public class McpToolRegistry {
                                 "name"),
                         crudTools::createKeyPairSecret));
 
+        var userToolList = List.of(
+                tool(
+                        "concord_create_user",
+                        "Create or update a Concord user. Requires Concord administrator privileges.",
+                        objectSchema(
+                                properties(
+                                        "username", string("Username."),
+                                        "domain", string("User domain."),
+                                        "displayName", string("Display name."),
+                                        "email", string("Email address."),
+                                        "type",
+                                                stringEnum(
+                                                        "User type. Defaults to the caller's type.", "LOCAL", "LDAP"),
+                                        "disabled", bool("Create or update the user in a disabled state."),
+                                        "roles",
+                                                stringArray("Role names to assign. Omit to preserve roles on update.")),
+                                "username"),
+                        userTools::createUser),
+                tool(
+                        "concord_get_user",
+                        "Get a Concord user by userId or username. Requires Concord administrator privileges.",
+                        objectSchema(properties(
+                                "userId", string("User UUID."),
+                                "username", string("Username."),
+                                "domain", string("User domain."),
+                                "type", stringEnum("User type for username lookup.", "LOCAL", "LDAP", "SSO"))),
+                        userTools::getUser),
+                tool(
+                        "concord_list_users",
+                        "List Concord users. Requires Concord administrator privileges.",
+                        objectSchema(properties(
+                                "filter", string("Optional username/display-name/email filter."),
+                                "offset", integer("First row offset. Defaults to 0."),
+                                "limit", integer("Maximum number of users. Defaults to 100."))),
+                        userTools::listUsers),
+                tool(
+                        "concord_set_user_roles",
+                        "Replace a Concord user's global roles. Requires Concord administrator privileges.",
+                        objectSchema(
+                                properties(
+                                        "userId", string("User UUID."),
+                                        "username", string("Username."),
+                                        "domain", string("User domain."),
+                                        "type", stringEnum("User type for username lookup.", "LOCAL", "LDAP", "SSO"),
+                                        "roles",
+                                                stringArray(
+                                                        "Role names to assign. Use an empty array to remove all roles.")),
+                                "roles"),
+                        userTools::setUserRoles),
+                tool(
+                        "concord_disable_user",
+                        "Disable a Concord user. Requires Concord administrator privileges.",
+                        objectSchema(properties(
+                                "userId", string("User UUID."),
+                                "username", string("Username."),
+                                "domain", string("User domain."),
+                                "type", stringEnum("User type for username lookup.", "LOCAL", "LDAP", "SSO"),
+                                "permanently", bool("Permanently disable the user."))),
+                        userTools::disableUser),
+                tool(
+                        "concord_enable_user",
+                        "Enable a disabled Concord user. Permanently disabled users cannot be enabled. Requires Concord administrator privileges.",
+                        objectSchema(properties(
+                                "userId", string("User UUID."),
+                                "username", string("Username."),
+                                "domain", string("User domain."),
+                                "type", stringEnum("User type for username lookup.", "LOCAL", "LDAP", "SSO"))),
+                        userTools::enableUser),
+                tool(
+                        "concord_delete_user",
+                        "Delete a Concord user. Requires Concord administrator privileges.",
+                        objectSchema(properties(
+                                "userId", string("User UUID."),
+                                "username", string("Username."),
+                                "domain", string("User domain."),
+                                "type", stringEnum("User type for username lookup.", "LOCAL", "LDAP", "SSO"))),
+                        userTools::deleteUser));
+
         var processAndLogTools = List.of(
                 tool(
                         "concord_start_process",
@@ -252,8 +336,10 @@ public class McpToolRegistry {
                         (arguments, request) -> logTools.streamLog(arguments, null),
                         (arguments, request, writer) -> logTools.streamLog(arguments, writer)));
 
-        var allTools = new java.util.ArrayList<McpTool>(crudToolList.size() + processAndLogTools.size());
+        var allTools =
+                new java.util.ArrayList<McpTool>(crudToolList.size() + userToolList.size() + processAndLogTools.size());
         allTools.addAll(crudToolList);
+        allTools.addAll(userToolList);
         allTools.addAll(processAndLogTools);
         this.tools = List.copyOf(allTools);
 
@@ -278,7 +364,10 @@ public class McpToolRegistry {
         try {
             var arguments = asObject(params.get("arguments"));
             return McpToolResult.ok(tool.handler().call(arguments, request)).toResponse(OBJECT_MAPPER);
-        } catch (WebApplicationException | IllegalArgumentException e) {
+        } catch (WebApplicationException
+                | ValidationErrorsException
+                | UnauthorizedException
+                | IllegalArgumentException e) {
             return McpToolResult.error(e.getMessage()).toResponse(OBJECT_MAPPER);
         } catch (RuntimeException e) {
             return McpToolResult.error("Tool execution failed: " + e.getClass().getSimpleName())
@@ -308,7 +397,10 @@ public class McpToolRegistry {
             var arguments = asObject(params.get("arguments"));
             result = McpToolResult.ok(tool.streamingHandler().call(arguments, request, writer))
                     .toResponse(OBJECT_MAPPER);
-        } catch (WebApplicationException | IllegalArgumentException e) {
+        } catch (WebApplicationException
+                | ValidationErrorsException
+                | UnauthorizedException
+                | IllegalArgumentException e) {
             result = McpToolResult.error(e.getMessage()).toResponse(OBJECT_MAPPER);
         } catch (RuntimeException e) {
             result = McpToolResult.error(

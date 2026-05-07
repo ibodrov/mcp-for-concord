@@ -35,6 +35,7 @@ public class PluginModule implements Module {
         bindJaxRsResource(binder, McpResource.class);
         binder.bind(McpToolRegistry.class).in(SINGLETON);
         binder.bind(ConcordCrudTools.class).in(SINGLETON);
+        binder.bind(ConcordUserTools.class).in(SINGLETON);
         binder.bind(ConcordProcessTools.class).in(SINGLETON);
         binder.bind(ConcordLogTools.class).in(SINGLETON);
     }

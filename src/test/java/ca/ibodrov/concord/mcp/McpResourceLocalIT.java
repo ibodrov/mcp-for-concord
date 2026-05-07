@@ -161,6 +161,62 @@ public class McpResourceLocalIT {
     }
 
     @Test
+    void testMcpEndpointManagesConcordUsers() throws Exception {
+        var tools = postMcp("tools/list", Map.of());
+        assertTrue(
+                object(tools.get("result")).get("tools").toString().contains("concord_create_user"), tools.toString());
+
+        var created = callTool(
+                "concord_create_user",
+                Map.of(
+                        "username",
+                        "mcp-it-managed-user",
+                        "displayName",
+                        "MCP IT Managed User",
+                        "email",
+                        "mcp-it-managed-user@example.com",
+                        "type",
+                        "LOCAL",
+                        "roles",
+                        List.of("concordSystemReader")));
+        assertEquals("user", created.get("entity"));
+        assertEquals("CREATED", created.get("result"));
+        assertEquals("mcp-it-managed-user", created.get("username"));
+        assertEquals("LOCAL", created.get("type"));
+        assertTrue(roleNames(created).contains("concordSystemReader"), created.toString());
+        var userId = created.get("userId").toString();
+
+        var fetched = callTool("concord_get_user", Map.of("userId", userId));
+        assertEquals(userId, fetched.get("userId"));
+        assertEquals("MCP IT Managed User", fetched.get("displayName"));
+
+        var roles = callTool(
+                "concord_set_user_roles",
+                Map.of("username", "mcp-it-managed-user", "type", "LOCAL", "roles", List.of("concordSystemWriter")));
+        assertTrue(roleNames(roles).contains("concordSystemWriter"), roles.toString());
+        assertFalse(roleNames(roles).contains("concordSystemReader"), roles.toString());
+
+        var disabled = callTool("concord_disable_user", Map.of("userId", userId));
+        assertEquals(true, disabled.get("disabled"));
+
+        var enabled = callTool("concord_enable_user", Map.of("username", "mcp-it-managed-user", "type", "LOCAL"));
+        assertEquals(false, enabled.get("disabled"));
+
+        var listed = callTool("concord_list_users", Map.of("filter", "mcp-it-managed-user", "limit", 10));
+        assertTrue(
+                list(listed.get("users")).stream()
+                        .map(McpResourceLocalIT::object)
+                        .anyMatch(u -> userId.equals(u.get("userId"))),
+                listed.toString());
+
+        var deleted = callTool("concord_delete_user", Map.of("userId", userId));
+        assertEquals("DELETED", deleted.get("result"));
+
+        var missing = callToolError("concord_get_user", Map.of("userId", userId));
+        assertTrue(missing.get("error").toString().contains("User not found"), missing.toString());
+    }
+
+    @Test
     void testMcpEndpointStartsProcessAndReadsLogs() throws Exception {
         var archive = zipBase64(
                 Map.of(
@@ -317,6 +373,13 @@ public class McpResourceLocalIT {
     @SuppressWarnings("unchecked")
     private static List<Object> list(Object value) {
         return (List<Object>) value;
+    }
+
+    private static List<String> roleNames(Map<String, Object> user) {
+        return list(user.get("roles")).stream()
+                .map(McpResourceLocalIT::object)
+                .map(role -> role.get("name").toString())
+                .toList();
     }
 
     private static int findFreePort() throws Exception {
